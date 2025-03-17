@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hong Kong Monthly Temperature Heatmap</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .tooltip {
+            position: absolute;
+            background: white;
+            padding: 5px;
+            border: 1px solid black;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        // Define margins and dimensions
+        const margin = { top: 50, right: 100, bottom: 120, left: 150 },
+              width = 1200 - margin.left - margin.right,
+              height = 600 - margin.top - margin.bottom;
+
+        // Create an SVG container
+        const svg = d3.select("body").append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+          .append("g")
+            .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+        // Load data from CSV file
+        d3.csv("temperature_daily.csv").then(function(data) {
+            data.forEach(d => {
+                d.date = new Date(d.date);
+                d.year = d.date.getFullYear();
+                d.month = d.date.getMonth() + 1;
+                d.max_temperature = +d.max_temperature;
+                d.min_temperature = +d.min_temperature;
+            });
+
+            // Aggregate temperature data by month and year
+            const aggregatedData = d3.rollups(data, v => ({
+                max_temperature: d3.mean(v, d => d.max_temperature),
+                min_temperature: d3.mean(v, d => d.min_temperature)
+            }), d => d.year, d => d.month)
+            .map(d => d[1].map(e => ({
+                year: d[0], 
+                month: e[0], 
+                max_temperature: e[1].max_temperature,
+                min_temperature: e[1].min_temperature
+            })))
+            .flat();
+
+            const years = [...new Set(aggregatedData.map(d => d.year))];
+            const months = [...Array(12).keys()].map(d => d + 1);
+
+            // Define scales for x (years) and y (months)
+            const xScale = d3.scaleBand()
+                .domain(years)
+                .range([0, width])
+                .padding(0.05);
+
+            const yScale = d3.scaleBand()
+                .domain(months)
+                .range([0, height])
+                .padding(0.05);
+
+            // Define color scale for temperature values
+            const colorScale = d3.scaleSequential(d3.interpolateOrRd)
+                .domain([d3.min(aggregatedData, d => d.max_temperature), d3.max(aggregatedData, d => d.max_temperature)]);
+
+            // Add x-axis
+            svg.append("g")
+                .attr("transform", "translate(0," + height + ")")
+                .call(d3.axisBottom(xScale).tickFormat(d3.format("d")))
+                .selectAll("text")
+                .style("text-anchor", "end")
+                .attr("dx", "-0.8em")
+                .attr("dy", "0.15em")
+                .attr("transform", "rotate(-45)");
+
+            // Add y-axis
+            svg.append("g")
+                .call(d3.axisLeft(yScale).tickFormat(d => d3.timeFormat("%B")(new Date(2000, d - 1, 1))));
+
+            // Add X-axis label
+            svg.append("text")
+                .attr("text-anchor", "middle")
+                .attr("x", width / 2)
+                .attr("y", height + 50)
+                .style("font-size", "16px")
+                .text("Year");
+
+            // Add Y-axis label
+            svg.append("text")
+                .attr("text-anchor", "middle")
+                .attr("transform", "rotate(-90)")
+                .attr("x", -height / 2)
+                .attr("y", -80)
+                .style("font-size", "16px")
+                .text("Month");
+
+            // Tooltip for interactive hover details
+            const tooltip = d3.select("body").append("div")
+                .attr("class", "tooltip");
+
+            // Draw heatmap squares
+            svg.selectAll()
+                .data(aggregatedData, d => d.year + ':' + d.month)
+                .enter()
+                .append("rect")
+                .attr("x", d => xScale(d.year))
+                .attr("y", d => yScale(d.month))
+                .attr("width", xScale.bandwidth())
+                .attr("height", yScale.bandwidth())
+                .style("fill", d => colorScale(d.max_temperature))
+                .on("mouseover", function(event, d) {
+                    tooltip.style("display", "block")
+            //Assume temperature is in °C
+                           .html(`Date: ${d.year}-${d.month}; Max: ${d.max_temperature.toFixed(1)}°C Min: ${d.min_temperature.toFixed(1)}°C`)
+                           .style("left", (event.pageX + 5) + "px")
+                           .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", function() {
+                    tooltip.style("display", "none");
+                });
+
+            // Legend
+            const legendWidth = 300;
+            const legendHeight = 20;
+
+            const legendScale = d3.scaleLinear()
+                .domain(colorScale.domain())
+                .range([0, legendWidth]);
+
+            const legendAxis = d3.axisBottom(legendScale).ticks(5);
+
+            const legend = svg.append("g")
+                .attr("transform", `translate(${width - legendWidth}, ${height + 60})`);
+
+            // Define gradient for legend
+            const gradient = legend.append("defs").append("linearGradient")
+                .attr("id", "legend-gradient")
+                .attr("x1", "0%")
+                .attr("x2", "100%")
+                .selectAll("stop")
+                .data([0, 0.5, 1])
+                .enter().append("stop")
+                .attr("offset", d => d * 100 + "%")
+                .attr("stop-color", d => colorScale(legendScale.domain()[0] + d * (legendScale.domain()[1] - legendScale.domain()[0])));
+
+            // Add legend rectangle
+            legend.append("rect")
+                .attr("width", legendWidth)
+                .attr("height", legendHeight)
+                .style("fill", "url(#legend-gradient)");
+
+            legend.append("g")
+                .attr("transform", `translate(0, ${legendHeight})`)
+                .call(legendAxis);
+
+            // Label for legend
+            legend.append("text")
+                .attr("x", legendWidth / 2)
+                .attr("y", legendHeight + 30)
+                .attr("text-anchor", "middle")
+                .style("font-size", "14px")
+                .text("Temperature (°C)");
+        });
+    </script>
+</body>
+</html>
