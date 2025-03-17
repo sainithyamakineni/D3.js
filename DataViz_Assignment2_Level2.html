@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hong Kong Monthly Temperature Heatmap with Trend Lines</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .tooltip {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 8px;
+            border: 1px solid black;
+            border-radius: 5px;
+            font-size: 12px;
+            display: none;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <script>
+         // Define margins and dimensions
+        const margin = { top: 50, right: 100, bottom: 120, left: 150 },
+              width = 1200 - margin.left - margin.right,
+              height = 600 - margin.top - margin.bottom;
+
+        // Create an SVG container
+        const svg = d3.select("body").append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+          .append("g")
+            .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+        // Tooltip
+        const tooltip = d3.select("body").append("div")
+            .attr("class", "tooltip");
+
+        // Load data from CSV file
+        d3.csv("temperature_daily.csv").then(function(data) {
+            data.forEach(d => {
+                d.date = new Date(d.date);
+                d.year = d.date.getFullYear();
+                d.month = d.date.getMonth() + 1;
+                d.day = d.date.getDate();
+                d.max_temperature = +d.max_temperature;
+                d.min_temperature = +d.min_temperature;
+            });
+        
+            // Select the last 10 years for visualization
+            const lastYears = Array.from(new Set(data.map(d => d.year))).slice(-10);
+            const months = [...Array(12).keys()].map(d => d + 1);
+
+            // Define X and Y scales for the heatmap
+            const xScale = d3.scaleBand()
+                .domain(lastYears)
+                .range([0, width])
+                .padding(0.05);
+
+            const yScale = d3.scaleBand()
+                .domain(months)
+                .range([0, height])
+                .padding(0.05);
+
+            // Define color scale for temperature mapping
+            const colorScale = d3.scaleSequential(d3.interpolateOrRd)
+                .domain([d3.min(data, d => d.max_temperature), d3.max(data, d => d.max_temperature)]);
+            
+            // Add X-axis (Years)
+            svg.append("g")
+                .attr("transform", "translate(0," + height + ")")
+                .call(d3.axisBottom(xScale).tickFormat(d3.format("d")));
+
+            // Add Y-axis (Months)
+            svg.append("g")
+                .call(d3.axisLeft(yScale).tickFormat(d => d3.timeFormat("%B")(new Date(2000, d - 1, 1))));
+
+            // Add X-axis label
+            svg.append("text")
+                .attr("text-anchor", "middle")
+                .attr("x", width / 2)
+                .attr("y", height + 50)
+                .style("font-size", "16px")
+                .text("Year");
+
+            // Add Y-axis label
+            svg.append("text")
+                .attr("text-anchor", "middle")
+                .attr("transform", "rotate(-90)")
+                .attr("x", -height / 2)
+                .attr("y", -80)
+                .style("font-size", "16px")
+                .text("Month");
+                
+            // Draw heatmap cells
+            svg.selectAll()
+                .data(data, d => d.year + ':' + d.month)
+                .enter()
+                .append("rect")
+                .attr("x", d => xScale(d.year))
+                .attr("y", d => yScale(d.month))
+                .attr("width", xScale.bandwidth())
+                .attr("height", yScale.bandwidth())
+                .style("fill", d => colorScale(d.max_temperature))
+                .on("mouseover", function(event, d) {
+                    tooltip.style("display", "block")
+                    .html(`Date: ${d.year}-${String(d.month).padStart(2, '0')}, Max: ${Math.round(d.max_temperature)}°C Min: ${Math.round(d.min_temperature)}°C`)
+                    .style("left", (event.pageX + 5) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mousemove", function(event) {
+                    tooltip.style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 10) + "px");
+                })
+                .on("mouseleave", function() {
+                    tooltip.style("display", "none");
+                });
+
+            // Add temperature trend lines inside each cell
+            const cells = svg.selectAll(".cell")
+                .data(lastYears.flatMap(year => months.map(month => ({ year, month }))));
+
+            cells.enter().append("g")
+                .attr("class", "cell")
+                .attr("transform", d => `translate(${xScale(d.year)},${yScale(d.month)})`)
+                .each(function(d) {
+                    const cellData = data.filter(entry => entry.year === d.year && entry.month === d.month);
+                    if (!cellData.length) return;
+
+                    // Define sub-scales for daily temperature visualization
+                    const xSubScale = d3.scaleLinear()
+                        .domain([1, d3.max(cellData, d => d.day)])
+                        .range([0, xScale.bandwidth()]);
+
+                    const ySubScale = d3.scaleLinear()
+                        .domain([
+                            d3.min(cellData, d => d.min_temperature) - 1,  // Add buffer
+                            d3.max(cellData, d => d.max_temperature) + 1   // Add buffer
+                        ])
+                        .range([yScale.bandwidth(), 0]);
+
+                    // Line generator for max temperature
+                    const lineMax = d3.line()
+                        .x(d => xSubScale(d.day))
+                        .y(d => ySubScale(d.max_temperature));
+
+                    // Line generator for min temperature
+                    const lineMin = d3.line()
+                        .x(d => xSubScale(d.day))
+                        .y(d => ySubScale(d.min_temperature));
+
+                    // Append max temperature trend line
+                    d3.select(this).append("path")
+                        .datum(cellData)
+                        .attr("fill", "none")
+                        .attr("stroke", "green")
+                        .attr("stroke-width", 2)  // Increased stroke width
+                        .attr("opacity", 0.8)
+                        .attr("d", lineMax);
+
+                    // Append min temperature trend line
+                    d3.select(this).append("path")
+                        .datum(cellData)
+                        .attr("fill", "none")
+                        .attr("stroke", "blue")
+                        .attr("stroke-width", 2)  // Increased stroke width
+                        .attr("opacity", 0.8)
+                        .attr("d", lineMin);
+                });
+
+            // Define dimensions for the vertical legend
+const legendHeight = 200; // Height of the gradient
+const legendWidth = 20;   // Width of the gradient
+
+// Define the vertical legend scale with fixed range (0°C to 40°C)
+const legendScale = d3.scaleLinear()
+    .domain([0, 40])  // Fixed range from 0 to 40°C
+    .range([legendHeight, 0]);  // Reverse the range so high temps are at the top
+
+// Create an axis for the legend (positioning ticks on the right side)
+const legendAxis = d3.axisRight(legendScale)
+    .ticks(5)
+    .tickFormat(d => `${d}°C`); // Display tick values as "X°C"
+
+// Append legend group to the right of the heatmap
+const legend = svg.append("g")
+    .attr("transform", `translate(${width + 40}, ${height / 2 - legendHeight / 2})`);
+
+// Define the vertical gradient
+const gradient = svg.append("defs").append("linearGradient")
+    .attr("id", "legend-gradient")
+    .attr("x1", "0%").attr("x2", "0%")  // Ensure vertical gradient
+    .attr("y1", "100%").attr("y2", "0%"); // Bottom to top
+
+// Define gradient color stops (mapping 0°C to 40°C)
+gradient.selectAll("stop")
+    .data([
+        { offset: "0%", color: colorScale(0) },    // Cool color at bottom (0°C)
+        { offset: "100%", color: colorScale(40) }  // Warm color at top (40°C)
+    ])
+    .enter().append("stop")
+    .attr("offset", d => d.offset)
+    .attr("stop-color", d => d.color);
+
+// Append the vertical legend rectangle with gradient fill
+legend.append("rect")
+    .attr("width", legendWidth)
+    .attr("height", legendHeight)
+    .style("fill", "url(#legend-gradient)")
+    .style("stroke", "black") // Add border for better visibility
+    .style("stroke-width", 1);
+
+// Add temperature labels and axis
+legend.append("g")
+    .attr("transform", `translate(${legendWidth}, 0)`)  // Move axis to the right
+    .call(legendAxis);
+
+        });
+    </script>
+</body>
+</html>
